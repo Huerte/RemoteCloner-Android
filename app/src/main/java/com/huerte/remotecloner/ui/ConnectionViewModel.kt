@@ -16,7 +16,12 @@ import androidx.lifecycle.viewModelScope
 import com.hoho.android.usbserial.driver.UsbSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.huerte.remotecloner.serial.Bridge
+import com.huerte.remotecloner.serial.Firmware
+import com.huerte.remotecloner.serial.FlashPort
+import com.huerte.remotecloner.serial.HexImage
 import com.huerte.remotecloner.serial.Role
+import com.huerte.remotecloner.serial.Stk500v1
+import com.huerte.remotecloner.serial.openFlashPort
 import com.huerte.remotecloner.serial.openTransport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,12 +40,23 @@ data class RoleUi(
     val status: String = "Not connected",
 )
 
+/** State of the "Set up board" card. [progress] is null while there is nothing to measure; [ok] is null until a run ends. */
+data class FlashUi(
+    val selectedId: String? = null,
+    val firmware: Firmware = Firmware.COMBINED,
+    val running: Boolean = false,
+    val progress: Float? = null,
+    val ok: Boolean? = null,
+    val status: String = "Pick a board and firmware, then tap Install.",
+)
+
 data class ConnectionUiState(
     val devices: List<DeviceOption> = emptyList(),
     val baud: Int = 115200,
     val roles: Map<Role, RoleUi> = Role.entries.associateWith { RoleUi() },
     val log: List<String> = emptyList(),
     val message: String? = null,
+    val flash: FlashUi = FlashUi(),
 )
 
 class ConnectionViewModel(application: Application) : AndroidViewModel(application) {
@@ -61,12 +77,27 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     /** Role waiting for the USB permission dialog, and the device it picked. */
     private var pending: Pair<Role, String>? = null
 
+    /** Device waiting for the USB permission dialog because the user tapped Install firmware. */
+    private var pendingFlash: String? = null
+
     private val permissionReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, intent: Intent) {
             if (intent.action != ACTION_USB_PERMISSION) return
+            val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+            val flashId = pendingFlash
+            if (flashId != null) {
+                pendingFlash = null
+                val flashDriver = drivers[flashId]
+                if (granted && flashDriver != null) {
+                    startFlash(flashDriver)
+                } else {
+                    updateFlash { it.copy(running = false, ok = false, status = "USB permission denied") }
+                    setMessage("USB permission denied.")
+                }
+                return
+            }
             val (role, id) = pending ?: return
             pending = null
-            val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
             val driver = drivers[id]
             if (granted && driver != null) {
                 startConnect(role, driver)
@@ -126,7 +157,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                 pick?.let(taken::add)
                 role to ui.copy(selectedId = pick)
             }.toMap()
-            s.copy(devices = options, roles = roles)
+            val flashPick = s.flash.selectedId?.takeIf { id -> options.any { it.id == id } } ?: options.firstOrNull()?.id
+            s.copy(devices = options, roles = roles, flash = s.flash.copy(selectedId = flashPick))
         }
         syncConnected()
     }
@@ -159,6 +191,10 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     fun select(role: Role, id: String) = updateRole(role) { it.copy(selectedId = id) }
 
     fun toggle(role: Role) {
+        if (_state.value.flash.running) {
+            setMessage("Wait for the firmware update to finish.")
+            return
+        }
         if (bridge.has(role)) {
             bridge.disconnect(role)
             syncConnected()
@@ -175,9 +211,85 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         } else {
             pending = role to id
             updateRole(role) { it.copy(busy = true, status = "Waiting for USB permission...") }
-            val intent = Intent(ACTION_USB_PERMISSION).setPackage(context.packageName)
-            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
-            usb.requestPermission(driver.device, PendingIntent.getBroadcast(context, 0, intent, flags))
+            requestUsbPermission(driver.device)
+        }
+    }
+
+    private fun requestUsbPermission(device: UsbDevice) {
+        val intent = Intent(ACTION_USB_PERMISSION).setPackage(context.packageName)
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+        usb.requestPermission(device, PendingIntent.getBroadcast(context, 0, intent, flags))
+    }
+
+    fun selectFlashDevice(id: String) = updateFlash { it.copy(selectedId = id) }
+
+    fun selectFirmware(firmware: Firmware) = updateFlash { it.copy(firmware = firmware) }
+
+    /** Installs the chosen firmware on the chosen board, asking for USB permission first if needed. */
+    fun install() {
+        val f = _state.value.flash
+        if (f.running) return
+        if (_state.value.roles.values.any { it.busy }) {
+            setMessage("Wait for the board to finish connecting.")
+            return
+        }
+        val id = f.selectedId
+        val driver = id?.let { drivers[it] }
+        if (id == null || driver == null) {
+            setMessage("Choose a USB device first.")
+            return
+        }
+        if (usb.hasPermission(driver.device)) {
+            startFlash(driver)
+        } else {
+            pendingFlash = id
+            updateFlash { it.copy(running = true, ok = null, progress = null, status = "Waiting for USB permission...") }
+            requestUsbPermission(driver.device)
+        }
+    }
+
+    private fun startFlash(driver: UsbSerialDriver) {
+        val firmware = _state.value.flash.firmware
+        updateFlash { it.copy(running = true, ok = null, progress = null, status = "Preparing...") }
+        viewModelScope.launch(Dispatchers.IO) { flashNow(driver, firmware) }
+    }
+
+    /** Blocking. Runs on the IO dispatcher. Errors end up in the status line, the log and the snackbar. */
+    private fun flashNow(driver: UsbSerialDriver, firmware: Firmware) {
+        val name = driver.device.deviceName
+        var port: FlashPort? = null
+        try {
+            val text = context.assets.open(firmware.asset).bufferedReader().use { it.readText() }
+            val image = HexImage.parse(text)
+            // The board is about to restart, so let go of it if a role is using it.
+            if (bridge.disconnectDevice(name)) {
+                appendLog("! $name disconnected to update it")
+                syncConnected()
+            }
+            appendLog("Installing ${firmware.title} (${image.size} bytes) on $name")
+            val opened = usb.openFlashPort(driver, Stk500v1.DEFAULT_BAUDS.first())
+            port = opened
+            Stk500v1(opened, log = ::appendLog).flash(image) { phase, done, total ->
+                updateFlash {
+                    it.copy(
+                        status = if (total > 0) "$phase $done of $total" else "$phase...",
+                        progress = if (total > 0) done.toFloat() / total else null,
+                    )
+                }
+            }
+            updateFlash {
+                it.copy(running = false, ok = true, progress = 1f, status = "Installed ${firmware.short}. Connect the board above to use it.")
+            }
+            setMessage("Firmware installed.")
+        } catch (e: Exception) {
+            val why = e.message ?: e.javaClass.simpleName
+            appendLog("! $why")
+            updateFlash { it.copy(running = false, ok = false, progress = null, status = why) }
+            setMessage(why)
+        } finally {
+            port?.close()
+            // Let auto-connect try this board again now that it has (new) firmware. `tried` is only touched on the main thread.
+            viewModelScope.launch { tried.removeAll { it.endsWith(":$name") } }
         }
     }
 
@@ -247,6 +359,8 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private fun updateRole(role: Role, f: (RoleUi) -> RoleUi) = _state.update { s ->
         s.copy(roles = s.roles + (role to f(s.roles.getValue(role))))
     }
+
+    private fun updateFlash(f: (FlashUi) -> FlashUi) = _state.update { s -> s.copy(flash = f(s.flash)) }
 
     private fun setMessage(text: String) = _state.update { it.copy(message = text) }
 

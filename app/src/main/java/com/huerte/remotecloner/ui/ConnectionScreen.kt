@@ -22,6 +22,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -43,6 +44,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.huerte.remotecloner.serial.Firmware
 import com.huerte.remotecloner.serial.Role
 import com.huerte.remotecloner.ui.theme.Ok
 
@@ -75,7 +77,7 @@ fun ConnectionScreen(vm: ConnectionViewModel, modifier: Modifier = Modifier) {
             Text("Connection", style = MaterialTheme.typography.headlineSmall)
             Text(
                 "Connect the receiver board (capture) and the sender board (transmit). " +
-                    "Each runs its own sketch.",
+                    "One board with the combined firmware can fill both roles.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -113,6 +115,14 @@ fun ConnectionScreen(vm: ConnectionViewModel, modifier: Modifier = Modifier) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+
+            FlashCard(
+                ui = state.flash,
+                devices = state.devices,
+                onDevice = vm::selectFlashDevice,
+                onFirmware = vm::selectFirmware,
+                onInstall = vm::install,
+            )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -162,6 +172,72 @@ private fun RoleCard(
             Button(onClick = onToggle, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) {
                 Text(if (ui.connected) "Disconnect" else "Connect")
             }
+        }
+    }
+}
+
+@Composable
+private fun FlashCard(
+    ui: FlashUi,
+    devices: List<DeviceOption>,
+    onDevice: (String) -> Unit,
+    onFirmware: (Firmware) -> Unit,
+    onInstall: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Set up board", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Install the firmware on an Arduino Uno or Nano (ATmega328P) over USB. " +
+                    "This replaces the program on the board. Mega boards are not supported yet.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            DevicePicker(
+                devices = devices,
+                selectedId = ui.selectedId,
+                enabled = !ui.running,
+                onSelect = onDevice,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Firmware.entries.forEach { fw ->
+                    FilterChip(
+                        selected = ui.firmware == fw,
+                        onClick = { onFirmware(fw) },
+                        enabled = !ui.running,
+                        label = { Text(fw.short) },
+                    )
+                }
+            }
+            Text(
+                ui.firmware.blurb,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(
+                onClick = onInstall,
+                enabled = !ui.running && devices.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (ui.running) "Installing..." else "Install firmware")
+            }
+            val p = ui.progress
+            if (ui.running) {
+                if (p != null) {
+                    LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            }
+            Text(
+                ui.status,
+                style = MaterialTheme.typography.bodySmall,
+                color = when (ui.ok) {
+                    true -> Ok
+                    false -> MaterialTheme.colorScheme.error
+                    null -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
         }
     }
 }

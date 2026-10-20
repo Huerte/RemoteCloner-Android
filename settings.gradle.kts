@@ -22,6 +22,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "RemoteCloner Android"
+rootProject.name = "IRRemoteCloner"
 include(":app")
  

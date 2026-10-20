@@ -31,7 +31,7 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 enum class Tab(val label: String) {
-    HOME("Home"), CLONE("Clone"), LIBRARY("Library"), CONTROL("Control"), CONNECTION("Connection")
+    HOME("Home"), CLONE("Clone"), LIBRARY("Library"), CONTROL("Control"), CONNECTION("Config")
 }
 
 enum class Tone { IDLE, WAITING, SUCCESS, ERROR }

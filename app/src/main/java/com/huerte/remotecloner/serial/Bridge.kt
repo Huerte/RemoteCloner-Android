@@ -49,7 +49,7 @@ class Bridge(
             else -> {
                 transport.close()
                 throw IllegalStateException(
-                    "No reply from the board. Flash the firmware from the Windows app " +
+                    "No reply from the board. Install the firmware with Set up board in the Config tab " +
                         "and check that the baud rate is 115200."
                 )
             }

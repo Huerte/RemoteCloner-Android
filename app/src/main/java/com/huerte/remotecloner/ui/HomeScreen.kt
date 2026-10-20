@@ -9,18 +9,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.huerte.remotecloner.data.plural
 
-private data class HomeCard(val title: String, val text: String, val tab: Tab?)
+private data class HomeCard(val title: String, val text: String, val tab: Tab)
 
 private val CARDS = listOf(
     HomeCard(
@@ -33,16 +27,14 @@ private val CARDS = listOf(
     HomeCard("Connection", "Choose the receiver and sender boards and read the serial log.", Tab.CONNECTION),
     HomeCard(
         "Set up board",
-        "Install the receiver or sender firmware on an Arduino. This is done from the Windows app.",
-        null,
+        "Install the firmware on an Arduino Uno or Nano straight from your phone. Found in the Config tab.",
+        Tab.CONNECTION,
     ),
 )
 
 /** Same dashboard as the Windows Home page: one card per page plus a line with the remote and key counts. */
 @Composable
 fun HomeScreen(state: RemoteUiState, onOpen: (Tab) -> Unit, modifier: Modifier = Modifier) {
-    var firmwareInfo by remember { mutableStateOf(false) }
-
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -50,7 +42,7 @@ fun HomeScreen(state: RemoteUiState, onOpen: (Tab) -> Unit, modifier: Modifier =
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("IR Swiss Knife", style = MaterialTheme.typography.headlineSmall)
+        Text("IRRemoteCloner", style = MaterialTheme.typography.headlineSmall)
         Text(
             "Clone, organise, edit and replay infrared remotes.",
             style = MaterialTheme.typography.bodyMedium,
@@ -58,7 +50,7 @@ fun HomeScreen(state: RemoteUiState, onOpen: (Tab) -> Unit, modifier: Modifier =
         )
         CARDS.forEach { c ->
             Card(
-                onClick = { if (c.tab != null) onOpen(c.tab) else firmwareInfo = true },
+                onClick = { onOpen(c.tab) },
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -76,20 +68,6 @@ fun HomeScreen(state: RemoteUiState, onOpen: (Tab) -> Unit, modifier: Modifier =
             else "${plural(state.names.size, "remote")} with ${plural(state.keyCount, "stored key")}.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-
-    if (firmwareInfo) {
-        AlertDialog(
-            onDismissRequest = { firmwareInfo = false },
-            title = { Text("Set up board") },
-            text = {
-                Text(
-                    "Flashing needs avrdude, which does not run on Android. Use the Set up board page of " +
-                        "the Windows app once per Arduino, then plug the board in here."
-                )
-            },
-            confirmButton = { TextButton(onClick = { firmwareInfo = false }) { Text("OK") } },
         )
     }
 }
