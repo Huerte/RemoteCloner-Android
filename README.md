@@ -4,7 +4,7 @@
 
 [![Version](https://img.shields.io/badge/version-1.0-blue.svg)](#)
 [![Platform](https://img.shields.io/badge/platform-Android%208.0%2B-blueviolet.svg)](#)
-[![License](https://img.shields.io/badge/license-not%20set-lightgrey.svg)](#license)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **A pocket infrared remote cloner for Android. Clone, organise, edit and replay IR remotes from your phone.**
 
@@ -29,7 +29,7 @@
 - [Supported Boards](#supported-boards)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
-- [Creator](#creator)
+- [Creator](#contributor)
 - [License](#license)
 
 ---
