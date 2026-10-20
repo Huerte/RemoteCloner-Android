@@ -74,6 +74,13 @@ class Bridge(
 
     fun disconnectAll() = Role.entries.forEach(::disconnect)
 
+    /** Drops every role served by the port tagged [tag] (the USB device name). True if any was connected. */
+    fun disconnectDevice(tag: String): Boolean {
+        val hit = Role.entries.filter { links[it]?.tag == tag }
+        hit.forEach(::disconnect)
+        return hit.isNotEmpty()
+    }
+
     private fun write(link: Link, text: String) {
         log("[${link.tag}] > ${text.take(120)}")
         link.transport.writeLine(text)

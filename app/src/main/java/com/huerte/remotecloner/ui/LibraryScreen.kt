@@ -2,8 +2,10 @@ package com.huerte.remotecloner.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,14 +13,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
@@ -32,7 +38,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -49,6 +58,7 @@ private sealed interface LibDialog {
     data object DeleteRemote : LibDialog
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun LibraryScreen(vm: RemoteViewModel, state: RemoteUiState) {
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
@@ -68,60 +78,83 @@ fun LibraryScreen(vm: RemoteViewModel, state: RemoteUiState) {
         uri?.let(vm::exportTo)
     }
 
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Library", style = MaterialTheme.typography.headlineSmall)
+    val hScroll = rememberScrollState()           // shared, so the header and every row slide together
+    var notes by remember(state.current) { mutableStateOf(remote?.notes.orEmpty()) }
 
-        RemoteSelector(state.names, state.current, vm::select, vm::newRemote)
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val has = state.current != null
-            OutlinedButton(onClick = { dialog = LibDialog.RenameRemote }, enabled = has) { Text("Rename") }
-            OutlinedButton(onClick = { dialog = LibDialog.DuplicateRemote }, enabled = has) { Text("Duplicate") }
-            OutlinedButton(onClick = { importer.launch(arrayOf("*/*")) }) { Text("Import") }
-            OutlinedButton(onClick = { exporter.launch("${state.current}.json") }, enabled = has) { Text("Export") }
-            OutlinedButton(onClick = { dialog = LibDialog.DeleteRemote }, enabled = has) { Text("Delete") }
-        }
+    // One scrolling list holds the header controls and the table, so a short (landscape) screen still
+    // shows plenty of rows; only the key action buttons stay pinned at the bottom.
+    Column(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(top = 16.dp)) {
+            item {
+                Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Library", style = MaterialTheme.typography.headlineSmall)
 
-        if (remote != null) {
-            var notes by remember(state.current) { mutableStateOf(remote.notes) }
-            OutlinedTextField(
-                value = notes,
-                onValueChange = { notes = it; vm.setNotes(it) },
-                label = { Text("Notes (brand, model, room)") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                label = { Text("Search keys") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
+                    RemoteSelector(state.names, state.current, vm::select, vm::newRemote)
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val has = state.current != null
+                        OutlinedButton(onClick = { dialog = LibDialog.RenameRemote }, enabled = has) { Text("Rename") }
+                        OutlinedButton(onClick = { dialog = LibDialog.DuplicateRemote }, enabled = has) { Text("Duplicate") }
+                        OutlinedButton(onClick = { importer.launch(arrayOf("*/*")) }) { Text("Import") }
+                        OutlinedButton(onClick = { exporter.launch("${state.current}.json") }, enabled = has) { Text("Export") }
+                        OutlinedButton(onClick = { dialog = LibDialog.DeleteRemote }, enabled = has, colors = dangerColors()) { Text("Delete") }
+                    }
 
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+                    if (remote != null) {
+                        OutlinedTextField(
+                            value = notes,
+                            onValueChange = { notes = it; vm.setNotes(it) },
+                            label = { Text("Notes (brand, model, room)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            label = { Text("Search keys") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            }
+
             when {
-                remote == null -> EmptyHint("No remote selected. Create one with New remote.")
-                shown.isEmpty() -> EmptyHint(
-                    if (q.isNotEmpty()) "No keys match your search."
-                    else "This remote has no keys yet. Use Add key, or record them in Clone."
-                )
-                else -> LazyColumn(Modifier.fillMaxSize()) {
-                    items(shown, key = { it.key }) { (k, c) ->
-                        KeyRow(k, c, selected = k == sel, onClick = { selected = k })
+                remote == null -> item { EmptyHint("No remote selected. Create one with New remote.") }
+                shown.isEmpty() -> item {
+                    EmptyHint(
+                        if (q.isNotEmpty()) "No keys match your search."
+                        else "This remote has no keys yet. Use Add key, or record them in Clone."
+                    )
+                }
+                else -> {
+                    // Same six columns as the Windows table; it scrolls sideways on a narrow screen.
+                    stickyHeader { TableHeader(hScroll) }
+                    itemsIndexed(shown, key = { _, e -> e.key }) { i, e ->
+                        TableRow(
+                            name = e.key,
+                            code = e.value,
+                            striped = i % 2 == 1,
+                            selected = e.key == sel,
+                            hScroll = hScroll,
+                            onClick = { selected = e.key },
+                            onDoubleClick = { selected = e.key; dialog = LibDialog.EditKey(e.key) },
+                        )
                     }
                 }
             }
         }
 
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             Button(onClick = { dialog = LibDialog.NewKey }, enabled = remote != null) { Text("Add key") }
             OutlinedButton(onClick = { dialog = LibDialog.EditKey(sel!!) }, enabled = sel != null) { Text("Edit") }
             OutlinedButton(onClick = { dialog = LibDialog.RenameKey(sel!!) }, enabled = sel != null) { Text("Rename") }
             OutlinedButton(onClick = { vm.relearn(sel!!) }, enabled = sel != null) { Text("Re-learn") }
             OutlinedButton(onClick = { vm.testKey(sel!!) }, enabled = sel != null) { Text("Test send") }
             OutlinedButton(onClick = { vm.duplicateKey(sel!!) }, enabled = sel != null) { Text("Duplicate") }
-            OutlinedButton(onClick = { dialog = LibDialog.DeleteKey(sel!!) }, enabled = sel != null) { Text("Delete") }
+            OutlinedButton(onClick = { dialog = LibDialog.DeleteKey(sel!!) }, enabled = sel != null, colors = dangerColors()) { Text("Delete") }
         }
     }
 
@@ -181,8 +214,11 @@ fun LibraryScreen(vm: RemoteViewModel, state: RemoteUiState) {
 }
 
 @Composable
+private fun dangerColors() = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+
+@Composable
 private fun EmptyHint(text: String) {
-    Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+    Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
         Text(
             text,
             style = MaterialTheme.typography.bodyMedium,
@@ -191,25 +227,74 @@ private fun EmptyHint(text: String) {
     }
 }
 
+private val COLUMN_WIDTHS = listOf(130.dp, 100.dp, 80.dp, 80.dp, 70.dp, 180.dp)
 @Composable
-private fun KeyRow(name: String, code: IrCode, selected: Boolean, onClick: () -> Unit) {
-    val bg = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface
-    Column(
+private fun Cells(values: List<String>, style: TextStyle, color: Color) {
+    Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        values.forEachIndexed { i, v ->
+            Text(
+                v,
+                style = style,
+                color = color,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.width(COLUMN_WIDTHS[i]).padding(end = 8.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun TableHeader(hScroll: ScrollState) {
+    Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).heightIn(min = 36.dp), contentAlignment = Alignment.CenterStart) {
+        Box(Modifier.horizontalScroll(hScroll)) {
+            Cells(
+                listOf("Key", "Protocol", "Address", "Command", "Pulses", "Note"),
+                MaterialTheme.typography.labelMedium,
+                MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun TableRow(
+    name: String,
+    code: IrCode,
+    striped: Boolean,
+    selected: Boolean,
+    hScroll: ScrollState,
+    onClick: () -> Unit,
+    onDoubleClick: () -> Unit,
+) {
+    val bg = when {
+        selected -> MaterialTheme.colorScheme.primaryContainer
+        striped -> MaterialTheme.colorScheme.surfaceContainerLow
+        else -> MaterialTheme.colorScheme.surface
+    }
+    Box(
         Modifier
             .fillMaxWidth()
             .background(bg)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 8.dp),
+            .combinedClickable(onClick = onClick, onDoubleClick = onDoubleClick)
+            .heightIn(min = 40.dp),
+        contentAlignment = Alignment.CenterStart,
     ) {
-        Text(name, style = MaterialTheme.typography.titleSmall)
-        Text(
-            "${code.protocolLabel}  addr ${code.addr ?: "-"}  cmd ${code.cmd ?: "-"}  ${code.raw.size} pulses" +
-                if (code.note.isNotEmpty()) "  ${code.note}" else "",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Box(Modifier.horizontalScroll(hScroll)) {
+            Cells(
+                listOf(
+                    name,
+                    code.protocolLabel,
+                    code.addr?.toString().orEmpty(),
+                    code.cmd?.toString().orEmpty(),
+                    code.raw.size.toString(),
+                    code.note,
+                ),
+                MaterialTheme.typography.bodyMedium,
+                MaterialTheme.colorScheme.onSurface,
+            )
+        }
     }
 }
 

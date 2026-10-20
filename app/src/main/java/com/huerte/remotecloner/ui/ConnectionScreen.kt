@@ -8,9 +8,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -36,15 +39,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.huerte.remotecloner.serial.Role
+import com.huerte.remotecloner.ui.theme.Ok
 
 private val BAUDS = listOf(115200, 57600, 9600)
-private val OkGreen = Color(0xFF2E7D32)
 
 @Composable
 fun ConnectionScreen(vm: ConnectionViewModel, modifier: Modifier = Modifier) {
@@ -66,6 +68,7 @@ fun ConnectionScreen(vm: ConnectionViewModel, modifier: Modifier = Modifier) {
         Column(
             modifier = Modifier
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -119,7 +122,7 @@ fun ConnectionScreen(vm: ConnectionViewModel, modifier: Modifier = Modifier) {
                 Text("Serial log", style = MaterialTheme.typography.titleSmall)
                 TextButton(onClick = vm::clearLog) { Text("Clear log") }
             }
-            LogView(state.log, Modifier.weight(1f).fillMaxWidth())
+            LogView(state.log, Modifier.height(240.dp).fillMaxWidth())
         }
     }
 }
@@ -139,7 +142,7 @@ private fun RoleCard(
                     Modifier
                         .size(10.dp)
                         .clip(CircleShape)
-                        .background(if (ui.connected) OkGreen else MaterialTheme.colorScheme.outline)
+                        .background(if (ui.connected) Ok else MaterialTheme.colorScheme.outline)
                 )
                 Column {
                     Text(role.title, style = MaterialTheme.typography.titleMedium)

@@ -31,6 +31,18 @@ class BridgeTest {
     }
 
     @Test
+    fun unpluggedDeviceDropsOnlyItsOwnRoles() {
+        val b = bridge()
+        val t = FakeTransport("PONG RECEIVER")
+        b.connect(Role.RECEIVER, t, "usb0")
+        assertFalse(b.disconnectDevice("usb9"))
+        assertTrue(b.has(Role.RECEIVER))
+        assertTrue(b.disconnectDevice("usb0"))
+        assertFalse(b.has(Role.RECEIVER))
+        assertFalse(t.isOpen)
+    }
+
+    @Test
     fun senderBoardOnReceiverSlotIsRejectedAndClosed() {
         val b = bridge()
         val t = FakeTransport("PONG SENDER")

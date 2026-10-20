@@ -73,4 +73,36 @@ class RemoteJsonTest {
         assertEquals("POWER_ON", keyName("  power on "))
         assertEquals("Living room TV", safeName(" Living room TV/../ "))
     }
+
+    @Test
+    fun keepsUnknownFieldsOnSave() {
+        val text = """
+            {
+              "notes": "",
+              "owner": {"name": "Huerte", "tags": [1, "two", null]},
+              "version": 3,
+              "keys": {"POWER": {"khz": 38, "raw": [1, 2], "label": "main", "flag": true}},
+              "macros": {}
+            }
+        """.trimIndent()
+        val remote = RemoteJson.parse(text)
+        assertEquals(setOf("owner", "version"), remote.extras.keys)
+        assertEquals(setOf("label", "flag"), remote.keys.getValue("POWER").extras.keys)
+
+        val out = org.json.JSONObject(RemoteJson.encode(remote))
+        assertEquals(3, out.getInt("version"))
+        assertEquals("Huerte", out.getJSONObject("owner").getString("name"))
+        assertEquals(3, out.getJSONObject("owner").getJSONArray("tags").length())
+        val power = out.getJSONObject("keys").getJSONObject("POWER")
+        assertEquals("main", power.getString("label"))
+        assertTrue(power.getBoolean("flag"))
+        assertEquals(remote, RemoteJson.parse(out.toString()))
+    }
+
+    @Test
+    fun pluralMatchesWindows() {
+        assertEquals("1 remote", plural(1, "remote"))
+        assertEquals("0 stored keys", plural(0, "stored key"))
+        assertEquals("2 remotes", plural(2, "remote"))
+    }
 }

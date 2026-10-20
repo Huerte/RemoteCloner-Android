@@ -17,9 +17,11 @@ import com.huerte.remotecloner.data.safeName
 import com.huerte.remotecloner.data.withKey
 import com.huerte.remotecloner.serial.Bridge
 import com.huerte.remotecloner.serial.Role
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,7 +31,7 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 enum class Tab(val label: String) {
-    CLONE("Clone"), LIBRARY("Library"), CONTROL("Control"), CONNECTION("Connection")
+    HOME("Home"), CLONE("Clone"), LIBRARY("Library"), CONTROL("Control"), CONNECTION("Connection")
 }
 
 enum class Tone { IDLE, WAITING, SUCCESS, ERROR }
@@ -49,6 +51,7 @@ data class PendingImport(val name: String, val text: String)
 
 data class RemoteUiState(
     val names: List<String> = emptyList(),
+    val keyCount: Int = 0,
     val current: String? = null,
     val remote: Remote? = null,
     val message: String? = null,
@@ -58,6 +61,7 @@ data class RemoteUiState(
     val sendMode: SendMode = SendMode.RAW,
     val repeats: Int = 0,
     val sendNote: String = "",
+    val macroRunning: Boolean = false,
 )
 
 /** Library, Clone and Control logic. Remotes live as JSON files in the app's private storage. */
@@ -73,6 +77,7 @@ class RemoteViewModel(application: Application, private val bridge: Bridge) : An
     private val cancelled = AtomicBoolean(false)
     private var queue: List<String> = emptyList()
     private var batchOn = false
+    private var macroJob: Job? = null
 
     init {
         reload(prefs.getString("remote", null))
@@ -96,15 +101,19 @@ class RemoteViewModel(application: Application, private val bridge: Bridge) : An
             }
         }
         prefs.edit().putString("remote", cur).apply()
-        _state.update { it.copy(names = names, current = cur, remote = remote) }
+        _state.update { it.copy(names = names, keyCount = totalKeys(names), current = cur, remote = remote) }
     }
 
     private fun edit(f: (Remote) -> Remote) {
         val cur = _state.value.current ?: return
-        val updated = f(_state.value.remote ?: return)
+        val before = _state.value.remote ?: return
+        val updated = f(before)
         store.save(cur, updated)
-        _state.update { it.copy(remote = updated) }
+        _state.update { it.copy(remote = updated, keyCount = it.keyCount + updated.keys.size - before.keys.size) }
     }
+
+    private fun totalKeys(names: List<String>): Int =
+        names.sumOf { n -> runCatching { store.load(n).keys.size }.getOrDefault(0) }
 
     /** A board is needed for the action: if it is missing, say so and jump to the Connection tab. */
     private fun needBoard(role: Role): Boolean {
@@ -117,9 +126,12 @@ class RemoteViewModel(application: Application, private val bridge: Bridge) : An
 
     fun select(name: String) = reload(name)
 
+    private fun badRemoteName() =
+        message("Enter a remote name using letters, digits, spaces, _ or -.")
+
     fun newRemote(raw: String) {
         val n = safeName(raw)
-        if (n.isEmpty()) return
+        if (n.isEmpty()) return badRemoteName()
         if (store.exists(n)) return message("A remote with that name already exists.")
         store.create(n)
         reload(n)
@@ -128,7 +140,8 @@ class RemoteViewModel(application: Application, private val bridge: Bridge) : An
     fun renameRemote(raw: String) {
         val old = _state.value.current ?: return
         val n = safeName(raw)
-        if (n.isEmpty() || n == old) return
+        if (n.isEmpty()) return badRemoteName()
+        if (n == old) return
         if (store.exists(n)) return message("A remote with that name already exists.")
         store.rename(old, n)
         reload(n)
@@ -137,7 +150,7 @@ class RemoteViewModel(application: Application, private val bridge: Bridge) : An
     fun duplicateRemote(raw: String) {
         val old = _state.value.current ?: return
         val n = safeName(raw)
-        if (n.isEmpty()) return
+        if (n.isEmpty()) return badRemoteName()
         if (store.exists(n)) return message("A remote with that name already exists.")
         store.duplicate(old, n)
         reload(n)
@@ -209,7 +222,8 @@ class RemoteViewModel(application: Application, private val bridge: Bridge) : An
     fun renameKey(old: String, raw: String) {
         val n = keyName(raw)
         val keys = _state.value.remote?.keys ?: return
-        if (n.isEmpty() || n == old) return
+        if (n.isEmpty()) return message("Enter a key name.")
+        if (n == old) return
         if (n in keys) return message("A key named $n already exists.")
         edit { r -> r.copy(keys = r.keys.entries.associate { (if (it.key == old) n else it.key) to it.value }) }
     }
@@ -264,22 +278,30 @@ class RemoteViewModel(application: Application, private val bridge: Bridge) : An
 
     fun saveMacro(name: String, text: String) {
         val n = name.trim()
-        if (n.isEmpty()) return
+        if (n.isEmpty()) return message("Enter a macro name.")
         edit { it.copy(macros = it.macros + (n to text)) }
     }
 
     fun deleteMacro(name: String) = edit { it.copy(macros = it.macros - name) }
 
-    /** Steps are comma separated: key names, or numbers meaning a delay in ms. A key wins over a number. */
+    /**
+     * Steps are comma separated: key names, or numbers meaning a delay in ms. A key wins over a number.
+     * Runs in the background; [stopMacro] ends it after the step in progress.
+     */
     fun runMacro(text: String) {
+        if (_state.value.macroRunning) return
         val keys = _state.value.remote?.keys ?: return
+        val steps = text.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        if (steps.isEmpty()) return _state.update { it.copy(sendNote = "Enter some steps, for example POWER, 500, VOL_UP.") }
         if (!needBoard(Role.SENDER)) return
         val mode = _state.value.sendMode
         val repeats = _state.value.repeats
-        val steps = text.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-        viewModelScope.launch(Dispatchers.IO) {
+        _state.update { it.copy(macroRunning = true, sendNote = "Running macro...") }
+        macroJob = viewModelScope.launch(Dispatchers.IO) {
+            var result = "Macro finished."
             try {
                 for (s in steps) {
+                    ensureActive()
                     val code = keys[keyName(s)]
                     val ms = if (s.all { it.isDigit() }) s.toLongOrNull() else null
                     when {
@@ -291,10 +313,19 @@ class RemoteViewModel(application: Application, private val bridge: Bridge) : An
                         else -> bridge.note("! unknown macro step: $s")
                     }
                 }
+            } catch (e: CancellationException) {
+                result = "Macro stopped."
             } catch (e: Exception) {
                 bridge.note("! ${e.message}")
+                result = "Macro error: ${e.message}"
+            } finally {
+                _state.update { it.copy(macroRunning = false, sendNote = result) }
             }
         }
+    }
+
+    fun stopMacro() {
+        macroJob?.cancel()
     }
 
     // ---------------------------------------------------------------- clone
@@ -320,7 +351,11 @@ class RemoteViewModel(application: Application, private val bridge: Bridge) : An
 
     fun startLearn(force: Boolean = false) {
         val name = keyName(_state.value.clone.keyName)
-        if (learnJob?.isActive == true || name.isEmpty()) return
+        if (learnJob?.isActive == true) return
+        if (name.isEmpty()) {
+            cloneNote(Tone.ERROR, "Enter a key name first.")
+            return
+        }
         val remote = _state.value.remote
         if (remote == null) {
             cloneNote(Tone.ERROR, "Create a remote first with New remote.")
@@ -384,7 +419,9 @@ class RemoteViewModel(application: Application, private val bridge: Bridge) : An
         val code = c.pending ?: return
         val name = keyName(c.keyName)
         if (name.isEmpty()) return
-        saveKey(name, name, code)             // an existing key keeps its position
+        // An existing key keeps its position and its note (re-learning should not wipe the note).
+        val old = _state.value.remote?.keys?.get(name)
+        saveKey(name, name, if (old == null) code else code.copy(note = old.note, extras = old.extras))
         updateClone { it.copy(pending = null, tone = Tone.SUCCESS, text = "Saved $name.") }
         if (batchOn && queue.isNotEmpty()) {
             val next = queue.first()
@@ -392,7 +429,7 @@ class RemoteViewModel(application: Application, private val bridge: Bridge) : An
             updateClone { it.copy(keyName = next) }
             viewModelScope.launch {
                 delay(400)
-                startLearn()
+                if (batchOn) startLearn()          // Cancel during the pause must stop the batch
             }
         } else {
             batchOn = false
@@ -417,7 +454,7 @@ class RemoteViewModel(application: Application, private val bridge: Bridge) : An
 
     fun startBatch() {
         val names = _state.value.clone.batchText.lines().filter { it.isNotBlank() }.map(::keyName)
-        if (names.isEmpty()) return
+        if (names.isEmpty()) return updateClone { it.copy(tone = Tone.ERROR, text = "Enter at least one key name for the batch.") }
         queue = names.drop(1)
         batchOn = true
         updateClone { it.copy(keyName = names.first()) }
@@ -426,5 +463,6 @@ class RemoteViewModel(application: Application, private val bridge: Bridge) : An
 
     override fun onCleared() {
         cancelled.set(true)
+        macroJob?.cancel()
     }
 }

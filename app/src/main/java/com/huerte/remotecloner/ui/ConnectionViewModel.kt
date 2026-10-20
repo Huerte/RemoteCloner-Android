@@ -10,6 +10,7 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hoho.android.usbserial.driver.UsbSerialDriver
@@ -24,7 +25,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-data class DeviceOption(val id: String, val label: String)
+/** [id] is the current USB device name; [key] is vendor:product, which survives re-plugging. */
+data class DeviceOption(val id: String, val label: String, val key: String)
 
 data class RoleUi(
     val selectedId: String? = null,
@@ -45,6 +47,10 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     private val context: Application = application
     private val usb = context.getSystemService(Context.USB_SERVICE) as UsbManager
     private val drivers = mutableMapOf<String, UsbSerialDriver>()
+    private val prefs = context.getSharedPreferences("remotecloner", Context.MODE_PRIVATE)
+
+    /** Role + device pairs already tried by [autoConnect], so a failing board is not retried on every resume. */
+    private val tried = mutableSetOf<String>()
 
     private val _state = MutableStateFlow(ConnectionUiState())
     val state: StateFlow<ConnectionUiState> = _state.asStateFlow()
@@ -71,7 +77,28 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /** Unplugging a board does not close its port by itself, so drop it here or the status would stay green. */
+    private val detachReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, intent: Intent) {
+            if (intent.action != UsbManager.ACTION_USB_DEVICE_DETACHED) return
+            val device = IntentCompat.getParcelableExtra(intent, UsbManager.EXTRA_DEVICE, UsbDevice::class.java) ?: return
+            val wasConnected = bridge.disconnectDevice(device.deviceName)
+            tried.removeAll { it.endsWith(":${device.deviceName}") }
+            if (wasConnected) {
+                appendLog("! ${device.deviceName} unplugged")
+                setMessage("A board was unplugged.")
+            }
+            refresh()
+        }
+    }
+
     init {
+        ContextCompat.registerReceiver(
+            context,
+            detachReceiver,
+            IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED),
+            ContextCompat.RECEIVER_EXPORTED,     // protected system broadcast, only the system can send it
+        )
         ContextCompat.registerReceiver(
             context,
             permissionReceiver,
@@ -85,17 +112,46 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         val found = UsbSerialProber.getDefaultProber().findAllDrivers(usb)
         drivers.clear()
         found.forEach { drivers[it.device.deviceName] = it }
-        val options = found.map { DeviceOption(it.device.deviceName, describe(it.device)) }
+        val options = found.map { DeviceOption(it.device.deviceName, describe(it.device), deviceKey(it.device)) }
         _state.update { s ->
+            val taken = mutableSetOf<String>()
             val roles = Role.entries.mapIndexed { index, role ->
                 val ui = s.roles.getValue(role)
                 val keep = ui.selectedId?.takeIf { id -> options.any { it.id == id } }
-                val fallback = options.getOrNull(index) ?: options.lastOrNull()
-                role to ui.copy(selectedId = keep ?: fallback?.id)
+                // No current pick: prefer the board used for this role last time, else go by position.
+                val saved = prefs.getString(prefKey(role), null)
+                val remembered = options.firstOrNull { it.key == saved && it.id !in taken }
+                val fallback = remembered ?: options.getOrNull(index) ?: options.lastOrNull()
+                val pick = keep ?: fallback?.id
+                pick?.let(taken::add)
+                role to ui.copy(selectedId = pick)
             }.toMap()
             s.copy(devices = options, roles = roles)
         }
         syncConnected()
+    }
+
+    /**
+     * Reconnects the boards used last time, like the Windows app does at start. Only boards that are
+     * plugged in and already have USB permission are opened, so no permission dialog pops up by itself.
+     */
+    fun autoConnect() {
+        val s = _state.value
+        val plan = Role.entries.mapNotNull { role ->
+            val saved = prefs.getString(prefKey(role), null) ?: return@mapNotNull null
+            if (bridge.has(role) || s.roles.getValue(role).busy) return@mapNotNull null
+            val option = s.devices.firstOrNull { it.id == s.roles.getValue(role).selectedId && it.key == saved }
+                ?: return@mapNotNull null
+            val driver = drivers[option.id] ?: return@mapNotNull null
+            if (!usb.hasPermission(driver.device) || !tried.add("${role.key}:${option.id}")) return@mapNotNull null
+            role to driver
+        }
+        if (plan.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            for ((role, driver) in plan) {
+                if (!bridge.has(role)) connectNow(role, driver, quiet = true)   // a combined sketch may have filled it
+            }
+        }
     }
 
     fun setBaud(baud: Int) = _state.update { it.copy(baud = baud) }
@@ -147,23 +203,31 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
     fun consumeMessage() = _state.update { it.copy(message = null) }
 
     private fun startConnect(role: Role, driver: UsbSerialDriver) {
+        viewModelScope.launch(Dispatchers.IO) { connectNow(role, driver, quiet = false) }
+    }
+
+    /** Opens the board and checks its sketch. [quiet] keeps failures out of the snackbar (log and status only). */
+    private suspend fun connectNow(role: Role, driver: UsbSerialDriver, quiet: Boolean) {
         updateRole(role) { it.copy(busy = true, status = "Connecting...") }
         val baud = _state.value.baud
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val transport = usb.openTransport(driver, baud)
-                bridge.connect(role, transport, driver.device.deviceName)
-            } catch (e: Exception) {
-                val why = e.message ?: e.javaClass.simpleName
-                appendLog("! $why")
-                updateRole(role) { it.copy(status = why) }
-                setMessage(why)
-            } finally {
-                updateRole(role) { it.copy(busy = false) }
-                syncConnected()
-            }
+        try {
+            val transport = usb.openTransport(driver, baud)
+            bridge.connect(role, transport, driver.device.deviceName)
+            prefs.edit().putString(prefKey(role), deviceKey(driver.device)).apply()
+        } catch (e: Exception) {
+            val why = e.message ?: e.javaClass.simpleName
+            appendLog("! $why")
+            updateRole(role) { it.copy(status = why) }
+            if (!quiet) setMessage(why)
+        } finally {
+            updateRole(role) { it.copy(busy = false) }
+            syncConnected()
         }
     }
+
+    private fun prefKey(role: Role) = "port_${role.key}"
+
+    private fun deviceKey(device: UsbDevice) = String.format("%04x:%04x", device.vendorId, device.productId)
 
     /** A combined sketch can connect both roles at once, so always re-read the bridge. */
     private fun syncConnected() = _state.update { s ->
@@ -197,6 +261,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
     override fun onCleared() {
         runCatching { context.unregisterReceiver(permissionReceiver) }
+        runCatching { context.unregisterReceiver(detachReceiver) }
         bridge.disconnectAll()
     }
 

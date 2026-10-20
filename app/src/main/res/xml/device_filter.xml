@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Vendors of common Arduino boards and USB-serial chips. Plugging one in offers to open this app,
+     and the user can tick "always", which also keeps the USB permission. -->
+<resources>
+    <usb-device vendor-id="9025" />   <!-- 0x2341 Arduino -->
+    <usb-device vendor-id="10755" />  <!-- 0x2A03 Arduino (dog hunter) -->
+    <usb-device vendor-id="6790" />   <!-- 0x1A86 WCH CH340 / CH341 clones -->
+    <usb-device vendor-id="1027" />   <!-- 0x0403 FTDI -->
+    <usb-device vendor-id="4292" />   <!-- 0x10C4 Silicon Labs CP210x -->
+    <usb-device vendor-id="6991" />   <!-- 0x1B4F SparkFun -->
+    <usb-device vendor-id="9114" />   <!-- 0x239A Adafruit -->
+</resources>

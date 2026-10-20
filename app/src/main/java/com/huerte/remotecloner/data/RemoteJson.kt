@@ -20,6 +20,7 @@ object RemoteJson {
             notes = if (newFormat) root.optString("notes", "") else "",
             keys = keys,
             macros = macros,
+            extras = if (newFormat) extrasOf(root, REMOTE_FIELDS) else emptyMap(),
         )
     }
 
@@ -32,6 +33,7 @@ object RemoteJson {
             .put("notes", remote.notes)
             .put("keys", keys)
             .put("macros", macros)
+        putExtras(root, remote.extras)
         return asciiOnly(root.toString(2))
     }
 
@@ -45,6 +47,7 @@ object RemoteJson {
             khz = o.optInt("khz", 38),
             raw = raw,
             note = o.optString("note", ""),
+            extras = extrasOf(o, CODE_FIELDS),
         )
     }
 
@@ -57,7 +60,23 @@ object RemoteJson {
         o.put("khz", c.khz)
         o.put("raw", JSONArray(c.raw))
         if (c.note.isNotEmpty()) o.put("note", c.note)
+        putExtras(o, c.extras)
         return o
+    }
+
+    private val REMOTE_FIELDS = setOf("notes", "keys", "macros")
+    private val CODE_FIELDS = setOf("proto", "name", "addr", "cmd", "khz", "raw", "note")
+
+    // A value is stored as the text of a one-item JSON array, which works for any JSON type on both
+    // Android's org.json and the JVM one used by the unit tests.
+    private fun extrasOf(o: JSONObject, known: Set<String>): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        for (k in o.keys()) if (k !in known) out[k] = JSONArray().put(o.get(k)).toString()
+        return out
+    }
+
+    private fun putExtras(o: JSONObject, extras: Map<String, String>) {
+        extras.forEach { (k, v) -> if (!o.has(k)) o.put(k, JSONArray(v).get(0)) }
     }
 
     private fun JSONObject.intOrNull(key: String): Int? =

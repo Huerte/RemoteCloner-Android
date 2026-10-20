@@ -12,6 +12,8 @@ data class IrCode(
     val khz: Int = 38,
     val raw: List<Int> = emptyList(),
     val note: String = "",
+    /** Fields this app does not know, kept as JSON text so saving never drops them. */
+    val extras: Map<String, String> = emptyMap(),
 ) {
     /** True when the sender can replay it with the compact "D" command. */
     val decodable: Boolean get() = proto != null && !name.isNullOrEmpty() && name != "UNKNOWN"
@@ -26,6 +28,8 @@ data class Remote(
     val notes: String = "",
     val keys: Map<String, IrCode> = emptyMap(),
     val macros: Map<String, String> = emptyMap(),
+    /** Unknown top-level fields, kept as JSON text (see [IrCode.extras]). */
+    val extras: Map<String, String> = emptyMap(),
 )
 
 enum class SendMode { RAW, DECODED }
@@ -34,6 +38,8 @@ val PRESETS: List<String> = listOf(
     "POWER", "MUTE", "VOL_UP", "VOL_DOWN", "CH_UP", "CH_DOWN", "UP", "DOWN", "LEFT",
     "RIGHT", "OK", "MENU", "BACK", "HOME", "INPUT",
 ) + (0..9).map { it.toString() }
+
+fun plural(n: Int, word: String): String = if (n == 1) "$n $word" else "$n ${word}s"
 
 fun keyName(text: String): String = text.trim().uppercase().replace(" ", "_")
 
