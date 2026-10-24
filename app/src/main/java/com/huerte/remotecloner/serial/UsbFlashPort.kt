@@ -17,13 +17,24 @@ class UsbFlashPort(private val port: UsbSerialPort) : FlashPort {
         return if (n > 0) buf.copyOf(n) else ByteArray(0)
     }
 
+    /**
+     * Discards all bytes currently in the USB receive buffer.
+     * Uses 50 ms read slices and up to 100 loops (5 s ceiling) to handle verbose bootloader banners
+     * that can be larger than what a short single read would consume.
+     */
     override fun drain() {
         var guard = 0
-        while (guard++ < 50 && port.read(buf, 20) > 0) { /* discard */ }
+        while (guard++ < 100 && port.read(buf, DRAIN_SLICE_MS) > 0) { /* discard */ }
     }
 
+    /**
+     * Reconfigures the serial port to [baud] baud, 8N1.
+     * Sleeps briefly afterwards so the USB-serial chip (CH340, FTDI, CP210x) has time to apply
+     * the new line settings before the first write arrives.
+     */
     override fun setBaud(baud: Int) {
         port.setParameters(baud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+        Thread.sleep(BAUD_SETTLE_MS)
     }
 
     override fun setLines(dtr: Boolean, rts: Boolean) {
@@ -38,6 +49,10 @@ class UsbFlashPort(private val port: UsbSerialPort) : FlashPort {
 
     private companion object {
         const val WRITE_TIMEOUT_MS = 2000
+        /** Read slice for drain() calls, in ms. Large enough to capture a full USB frame. */
+        const val DRAIN_SLICE_MS = 50
+        /** Time to wait after setBaud for the USB-serial chip to apply the new line config. */
+        const val BAUD_SETTLE_MS = 50L
     }
 }
 

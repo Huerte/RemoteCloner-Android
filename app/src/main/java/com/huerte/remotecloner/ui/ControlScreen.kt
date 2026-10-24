@@ -1,29 +1,45 @@
 package com.huerte.remotecloner.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,20 +48,37 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.huerte.remotecloner.data.Remote
 import com.huerte.remotecloner.data.SendMode
+import com.huerte.remotecloner.ui.theme.Err
+import com.huerte.remotecloner.ui.theme.Ok
 
-// Same wording as the Windows mode dropdown.
-private fun modeLabel(mode: SendMode) = when (mode) {
-    SendMode.RAW -> "Raw replay (most compatible)"
-    SendMode.DECODED -> "Decoded (compact, if protocol known)"
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+private fun modeShortLabel(mode: SendMode) = when (mode) {
+    SendMode.RAW -> "Raw"
+    SendMode.DECODED -> "Decoded"
 }
 
-private enum class Panel { KEYS, MACRO }
+private fun modeDescription(mode: SendMode) = when (mode) {
+    SendMode.RAW -> "Raw replay — most compatible, works with any device"
+    SendMode.DECODED -> "Decoded — compact signal, requires a known IR protocol"
+}
 
-private fun appendStep(text: String, step: String) = if (text.isBlank()) step else "${text.trimEnd().trimEnd(',')}, $step"
+private enum class ControlPanel { KEYS, MACRO }
+
+private fun appendStep(text: String, step: String) =
+    if (text.isBlank()) step else "${text.trimEnd().trimEnd(',')}, $step"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Screen
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 fun ControlScreen(vm: RemoteViewModel, state: RemoteUiState) {
@@ -55,150 +88,257 @@ fun ControlScreen(vm: RemoteViewModel, state: RemoteUiState) {
 
     var macroName by remember(state.current) { mutableStateOf("") }
     var macroText by remember(state.current) { mutableStateOf("") }
-    var pickMenu by remember { mutableStateOf(false) }
     var modeMenu by remember { mutableStateOf(false) }
-    var panel by rememberSaveable { mutableStateOf(Panel.KEYS) }
+    var pickMenu by remember { mutableStateOf(false) }
+    var panel by rememberSaveable { mutableStateOf(ControlPanel.KEYS) }
+    var showSendOptions by rememberSaveable { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
 
-    // The whole page is one scrolling grid, so on a short or landscape screen nothing gets squeezed out.
-    // Header and macro section span all four columns; the keys are the 4-column cells in between.
     val full: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
+
     LazyVerticalGrid(
-        columns = GridCells.Fixed(4),
+        columns = GridCells.Fixed(3),
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        // ── Header ────────────────────────────────────────────────────────
         item(span = full) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Control panel", style = MaterialTheme.typography.headlineSmall)
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "Send keys from a stored remote or run a saved macro.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    "Control",
+                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold),
                 )
+
+                // Remote selector
                 RemoteSelector(state.names, state.current, vm::select, vm::newRemote)
-                Box {
-                    OutlinedButton(onClick = { modeMenu = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Mode: " + modeLabel(state.sendMode), maxLines = 1, overflow = TextOverflow.Ellipsis)
+
+                // Send result feedback
+                if (state.sendNote.isNotEmpty()) {
+                    val noteColor = when {
+                        state.sendNote.startsWith("Error") || state.sendNote.startsWith("error") -> Err
+                        state.sendNote.startsWith("Sent") -> Ok
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
                     }
-                    DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
-                        SendMode.entries.forEach { m ->
-                            DropdownMenuItem(
-                                text = { Text(modeLabel(m)) },
-                                onClick = { vm.setSendMode(m); modeMenu = false },
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            state.sendNote,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = noteColor,
+                            modifier = Modifier.padding(10.dp),
+                        )
+                    }
+                }
+
+                // Send options (collapsed for beginners)
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column {
+                        TextButton(
+                            onClick = { showSendOptions = !showSendOptions },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                        ) {
+                            Text(
+                                "Send options: ${modeShortLabel(state.sendMode)}" +
+                                    if (state.repeats > 0) " · ${state.repeats}× repeat" else "",
+                                style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Icon(
+                                if (showSendOptions) Icons.Default.KeyboardArrowUp
+                                else Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
                             )
                         }
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Repeats", style = MaterialTheme.typography.labelLarge)
-                    OutlinedButton(onClick = { vm.setRepeats(state.repeats - 1) }, enabled = state.repeats > 0) { Text("-") }
-                    Text(state.repeats.toString(), style = MaterialTheme.typography.titleMedium)
-                    OutlinedButton(onClick = { vm.setRepeats(state.repeats + 1) }, enabled = state.repeats < 10) { Text("+") }
-                }
-                // Result of the last send, kept next to the keys so it is visible without scrolling.
-                if (state.sendNote.isNotEmpty()) {
-                    Text(
-                        state.sendNote,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.tertiary,
-                    )
-                }
-                // Keys and Macro are two views of the same page, so macros are never buried below a long key list.
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = panel == Panel.KEYS, onClick = { panel = Panel.KEYS }, label = { Text("Keys") })
-                    FilterChip(selected = panel == Panel.MACRO, onClick = { panel = Panel.MACRO }, label = { Text("Macro") })
-                }
-            }
-        }
-
-        if (panel == Panel.MACRO) {
-            item(span = full) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Box {
-                        OutlinedButton(
-                            onClick = { pickMenu = true },
-                            enabled = macros.isNotEmpty(),
-                            modifier = Modifier.fillMaxWidth(),
+                        AnimatedVisibility(
+                            visible = showSendOptions,
+                            enter = expandVertically(),
+                            exit = shrinkVertically(),
                         ) {
-                            Text(macroName.ifEmpty { "Saved macros" }, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        DropdownMenu(expanded = pickMenu, onDismissRequest = { pickMenu = false }) {
-                            macros.keys.forEach { n ->
-                                DropdownMenuItem(
-                                    text = { Text(n) },
-                                    onClick = { macroName = n; macroText = macros[n].orEmpty(); pickMenu = false },
+                            Column(
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                HorizontalDivider()
+
+                                // Mode picker
+                                Text(
+                                    "Signal mode",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                                Box {
+                                    OutlinedButton(
+                                        onClick = { modeMenu = true },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(10.dp),
+                                    ) {
+                                        Text(
+                                            modeDescription(state.sendMode),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        Icon(
+                                            Icons.Default.KeyboardArrowDown,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
+                                    DropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
+                                        SendMode.entries.forEach { m ->
+                                            DropdownMenuItem(
+                                                text = { Text(modeDescription(m)) },
+                                                onClick = { vm.setSendMode(m); modeMenu = false },
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Repeat counter
+                                Text(
+                                    "Repeat count",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { vm.setRepeats(state.repeats - 1) },
+                                        enabled = state.repeats > 0,
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                                    ) { Text("−") }
+                                    Text(
+                                        state.repeats.toString(),
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                                    )
+                                    OutlinedButton(
+                                        onClick = { vm.setRepeats(state.repeats + 1) },
+                                        enabled = state.repeats < 10,
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                                    ) { Text("+") }
+                                    Text(
+                                        if (state.repeats == 0) "Send once" else "Extra sends after first",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                         }
                     }
-                    OutlinedTextField(
-                        value = macroText,
-                        onValueChange = { macroText = it },
-                        label = { Text("POWER, 500, VOL_UP  (numbers are delays in ms)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (state.macroRunning) {
+                }
+
+                // Panel tabs: Keys / Macro
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(ControlPanel.KEYS to "Keys", ControlPanel.MACRO to "Macro").forEach { (p, label) ->
+                        if (panel == p) {
                             Button(
-                                onClick = vm::stopMacro,
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                            ) { Text("Stop") }
+                                onClick = { panel = p },
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+                            ) { Text(label) }
                         } else {
-                            Button(onClick = { vm.runMacro(macroText) }, enabled = remote != null) { Text("Run") }
+                            OutlinedButton(
+                                onClick = { panel = p },
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+                            ) { Text(label) }
                         }
-                        OutlinedButton(onClick = { saving = true }, enabled = remote != null && !state.macroRunning) { Text("Save macro") }
-                        OutlinedButton(
-                            onClick = { deleting = true },
-                            enabled = macroName in macros && !state.macroRunning,
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                        ) { Text("Delete macro") }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(onClick = { macroText = appendStep(macroText, "500") }) { Text("+ 500 ms") }
-                        OutlinedButton(onClick = { macroText = ""; macroName = "" }, enabled = macroText.isNotEmpty()) { Text("Clear") }
+                    if (panel == ControlPanel.MACRO) {
+                        Text(
+                            "Tap a key below to add it to the macro",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.CenterVertically),
+                        )
                     }
-                    Text(
-                        "Tap a key below to add it to the macro.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
             }
         }
 
-        if (keys.isEmpty()) {
+        // ── Macro editor ──────────────────────────────────────────────────
+        if (panel == ControlPanel.MACRO) {
             item(span = full) {
-                Text(
-                    "No keys to send yet. Record keys in Clone remote first.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 24.dp),
+                MacroEditor(
+                    macros = macros,
+                    macroName = macroName,
+                    macroText = macroText,
+                    running = state.macroRunning,
+                    remote = remote,
+                    onPickMacro = { n -> macroName = n; macroText = macros[n].orEmpty() },
+                    onTextChange = { macroText = it },
+                    onRun = { vm.runMacro(macroText) },
+                    onStop = vm::stopMacro,
+                    onAdd500 = { macroText = appendStep(macroText, "500") },
+                    onClear = { macroText = ""; macroName = "" },
+                    onSave = { saving = true },
+                    onDelete = { deleting = true },
+                    pickMenu = pickMenu,
+                    onPickMenu = { pickMenu = it },
                 )
             }
-        } else {
-            items(keys, key = { it }) { k ->
-                FilledTonalButton(
-                    onClick = { if (panel == Panel.KEYS) vm.fire(k) else macroText = appendStep(macroText, k) },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
-                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
+        }
+
+        // ── Empty state ───────────────────────────────────────────────────
+        if (keys.isEmpty()) {
+            item(span = full) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        k,
-                        style = MaterialTheme.typography.labelMedium,
-                        textAlign = TextAlign.Center,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                        if (remote == null)
+                            "Select a remote above, or create one in My remotes."
+                        else
+                            "No keys yet. Record buttons in the Clone tab first.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(20.dp),
                     )
                 }
             }
         }
+
+        // ── Key grid ──────────────────────────────────────────────────────
+        items(keys, key = { it }) { k ->
+            FilledTonalButton(
+                onClick = {
+                    if (panel == ControlPanel.KEYS) vm.fire(k)
+                    else macroText = appendStep(macroText, k)
+                },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    k,
+                    style = MaterialTheme.typography.labelMedium,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+
+        item(span = full) { Spacer(Modifier.height(16.dp)) }
     }
 
+    // ── Dialogs ───────────────────────────────────────────────────────────
     if (saving) {
         TextPromptDialog(
             title = "Save macro",
@@ -212,10 +352,136 @@ fun ControlScreen(vm: RemoteViewModel, state: RemoteUiState) {
     if (deleting) {
         ConfirmDialog(
             title = "Delete macro",
-            text = "Delete macro \u201c$macroName\u201d?",
+            text = "Delete \"$macroName\"? This cannot be undone.",
             confirmText = "Delete",
             onConfirm = { vm.deleteMacro(macroName); macroName = ""; macroText = ""; deleting = false },
             onDismiss = { deleting = false },
         )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Macro editor panel
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun MacroEditor(
+    macros: Map<String, String>,
+    macroName: String,
+    macroText: String,
+    running: Boolean,
+    remote: Remote?,
+    onPickMacro: (String) -> Unit,
+    onTextChange: (String) -> Unit,
+    onRun: () -> Unit,
+    onStop: () -> Unit,
+    onAdd500: () -> Unit,
+    onClear: () -> Unit,
+    onSave: () -> Unit,
+    onDelete: () -> Unit,
+    pickMenu: Boolean,
+    onPickMenu: (Boolean) -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(0.dp),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+
+            // Saved macros picker
+            if (macros.isNotEmpty()) {
+                Box {
+                    OutlinedButton(
+                        onClick = { onPickMenu(true) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        Text(
+                            macroName.ifEmpty { "Load a saved macro" },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Icon(
+                            Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    DropdownMenu(expanded = pickMenu, onDismissRequest = { onPickMenu(false) }) {
+                        macros.keys.forEach { n ->
+                            DropdownMenuItem(
+                                text = { Text(n) },
+                                onClick = { onPickMacro(n); onPickMenu(false) },
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Macro text field
+            OutlinedTextField(
+                value = macroText,
+                onValueChange = onTextChange,
+                label = { Text("Steps: POWER, 500, VOL_UP") },
+                supportingText = { Text("Key names and numbers (delays in ms), comma-separated.") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+            )
+
+            // Run / Stop
+            if (running) {
+                Button(
+                    onClick = onStop,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ) { Text("Stop macro") }
+            } else {
+                Button(
+                    onClick = onRun,
+                    enabled = remote != null && macroText.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                ) { Text("Run macro") }
+            }
+
+            // Action row
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onAdd500,
+                    enabled = !running,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                ) { Text("+ 500 ms") }
+                OutlinedButton(
+                    onClick = onSave,
+                    enabled = remote != null && !running,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                ) { Text("Save") }
+                if (macroName.isNotEmpty()) {
+                    OutlinedButton(
+                        onClick = onDelete,
+                        enabled = !running,
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    ) { Text("Delete") }
+                }
+                Spacer(Modifier.weight(1f))
+                if (macroText.isNotEmpty()) {
+                    OutlinedButton(
+                        onClick = onClear,
+                        enabled = !running,
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    ) { Text("Clear") }
+                }
+            }
+        }
     }
 }

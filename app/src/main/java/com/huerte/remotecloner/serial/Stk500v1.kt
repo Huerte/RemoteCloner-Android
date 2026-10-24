@@ -20,6 +20,8 @@ class Stk500v1(
     private val sleep: (Long) -> Unit = { Thread.sleep(it) },
     private val now: () -> Long = { System.currentTimeMillis() },
 ) {
+    /** Whether the flasher is currently inside a programming session (ENTER_PROGMODE was accepted). */
+    private var inProgMode = false
     /** Bytes that arrived beyond what the last read asked for. */
     private var carry = ByteArray(0)
 
@@ -65,17 +67,22 @@ class Stk500v1(
 
     /**
      * Pulses DTR and RTS like avrdude does for Arduino boards. The falling edge on DTR is coupled to the
-     * reset pin through a capacitor, so the chip restarts and its bootloader waits for a few seconds for us.
+     * reset pin through a capacitor, so the chip restarts and its bootloader waits a few seconds for us.
+     * We wait [bootDelayMs] after releasing reset so the bootloader banner bytes can arrive and be drained
+     * before the first sync command, avoiding "reply 00 00" or echo-back errors.
      */
-    fun reset() {
+    fun reset(bootDelayMs: Long = BOOT_DELAY_MS) {
+        inProgMode = false
         carry = ByteArray(0)
         port.setLines(dtr = false, rts = false)
         sleep(50)
         port.setLines(dtr = true, rts = true)
         sleep(100)
         port.setLines(dtr = false, rts = false)
-        sleep(50)
+        // Wait for the bootloader to start and flush its welcome bytes before we begin syncing.
+        sleep(bootDelayMs)
         port.drain()
+        carry = ByteArray(0)
     }
 
     /** True once the bootloader answers the handshake. Retries for about two seconds. */
@@ -86,6 +93,8 @@ class Stk500v1(
             port.write(byteArrayOf(GET_SYNC, EOP))
             val r = readExact(2, SYNC_TIMEOUT_MS)
             if (r.size == 2 && r[0] == INSYNC && r[1] == OK) return true
+            // Small back-off so we don't flood the bootloader before it is ready.
+            sleep(20)
         }
         return false
     }
@@ -93,6 +102,7 @@ class Stk500v1(
     /**
      * Refuses a chip that is clearly not an ATmega328 family part. A bootloader that does not answer the
      * signature request is let through, because some old ones do not implement it.
+     * After any failure we resync so the next command starts from a clean state.
      */
     private fun checkChip() {
         port.write(byteArrayOf(READ_SIGN, EOP))
@@ -107,14 +117,43 @@ class Stk500v1(
             }
         } else {
             log("Could not read the chip signature, continuing")
+            // Drain any partial reply and resync so enterProgMode starts from a clean protocol state.
             port.drain()
             carry = ByteArray(0)
+            if (!sync()) {
+                throw FlashException(
+                    "Lost sync after the chip signature query. The board may have reset. Try again."
+                )
+            }
         }
     }
 
+    /**
+     * Sends ENTER_PROGMODE and expects an INSYNC/OK reply.
+     * Retries once after a resync if the first attempt returns garbage, which can happen when the
+     * bootloader has buffered echo bytes from the chip-signature exchange (causing "reply 50 4F" or "00 00").
+     */
     private fun enterProgMode() {
-        port.write(byteArrayOf(ENTER_PROGMODE, EOP))
-        expectOk("starting the update")
+        for (attempt in 1..PROGMODE_ATTEMPTS) {
+            port.write(byteArrayOf(ENTER_PROGMODE, EOP))
+            val r = readExact(2, 2000)
+            if (r.size >= 2 && r[0] == INSYNC && r[1] == OK) {
+                inProgMode = true
+                return
+            }
+            if (attempt < PROGMODE_ATTEMPTS) {
+                val got = r.joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
+                log("Prog-mode attempt $attempt failed (reply $got), resyncing...")
+                port.drain()
+                carry = ByteArray(0)
+                if (!sync()) throw FlashException(
+                    "Lost sync before entering programming mode. Try again."
+                )
+            } else {
+                val got = r.joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
+                throw FlashException("The board rejected the request while starting the update (reply $got).")
+            }
+        }
     }
 
     private fun program(image: HexImage, progress: FlashProgress) {
@@ -160,6 +199,7 @@ class Stk500v1(
     }
 
     private fun leave() {
+        inProgMode = false
         port.write(byteArrayOf(LEAVE_PROGMODE, EOP))
         expectOk("finishing the update")
     }
@@ -180,16 +220,23 @@ class Stk500v1(
         }
     }
 
-    /** Reads exactly [n] bytes, or fewer if [timeoutMs] runs out first. Surplus bytes are kept for the next read. */
+    /**
+     * Reads exactly [n] bytes, or fewer if [timeoutMs] runs out first.
+     * Surplus bytes are saved in [carry] for the next read.
+     * Each individual [FlashPort.read] call uses a minimum of [MIN_READ_POLL_MS] ms so we don't
+     * spin with near-zero timeouts when the deadline is close, which would starve the USB stack.
+     */
     private fun readExact(n: Int, timeoutMs: Long): ByteArray {
-        val out = ByteArrayOutputStream()
+        val out = ByteArrayOutputStream(n)
         out.write(carry)
         carry = ByteArray(0)
         val end = now() + timeoutMs
         while (out.size() < n) {
             val left = end - now()
             if (left <= 0) break
-            out.write(port.read(minOf(left, 100L).toInt()))
+            val pollMs = maxOf(minOf(left, 50L), MIN_READ_POLL_MS).toInt()
+            val chunk = port.read(pollMs)
+            if (chunk.isNotEmpty()) out.write(chunk)
         }
         val all = out.toByteArray()
         if (all.size <= n) return all
@@ -205,8 +252,19 @@ class Stk500v1(
         const val MAX_APP_BYTES = 30720
 
         const val PAGE_SIZE = 128
+
+        // Sync: 10 attempts × 200 ms = ~2 s window, matching avrdude's default.
         private const val SYNC_ATTEMPTS = 10
         private const val SYNC_TIMEOUT_MS = 200L
+
+        // ENTER_PROGMODE: retry up to 3 times if we get garbage (e.g. echo-back from a slow bootloader).
+        private const val PROGMODE_ATTEMPTS = 3
+
+        // Time to wait after reset before the first sync so the bootloader can start and flush its banner.
+        private const val BOOT_DELAY_MS = 200L
+
+        // Minimum time (ms) per port.read() poll to avoid busy-spinning on the USB stack.
+        private const val MIN_READ_POLL_MS = 10L
 
         private const val INSYNC: Byte = 0x14
         private const val OK: Byte = 0x10

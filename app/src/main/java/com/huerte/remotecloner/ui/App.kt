@@ -1,11 +1,14 @@
 package com.huerte.remotecloner.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -88,9 +91,13 @@ fun App(connection: ConnectionViewModel, remotes: RemoteViewModel) {
         },
     ) { padding ->
         Column(Modifier.padding(padding).consumeWindowInsets(padding).imePadding()) {
+            val receiverConnected = conn.roles[Role.RECEIVER]?.connected == true
+            val senderConnected = conn.roles[Role.SENDER]?.connected == true
             ConnectionStatusLine(
-                receiver = conn.roles[Role.RECEIVER]?.connected == true,
-                sender = conn.roles[Role.SENDER]?.connected == true,
+                receiver = receiverConnected,
+                sender = senderConnected,
+                // Tap the bar to jump to Setup when boards are not yet fully connected.
+                onTap = { if (!(receiverConnected && senderConnected)) tab = Tab.CONNECTION },
             )
             Box(Modifier.weight(1f)) {
                 when (tab) {
@@ -115,26 +122,43 @@ fun App(connection: ConnectionViewModel, remotes: RemoteViewModel) {
     }
 }
 
-/** The Windows status bar: a dot plus "Receiver connected, sender not connected" and so on. */
+/**
+ * Compact connection status bar. When boards are not fully connected the whole row is tappable so
+ * beginners can immediately find the Setup screen without hunting through the nav bar.
+ */
 @Composable
-private fun ConnectionStatusLine(receiver: Boolean, sender: Boolean) {
+private fun ConnectionStatusLine(receiver: Boolean, sender: Boolean, onTap: () -> Unit) {
     val text = when {
         receiver && sender -> "Receiver and sender connected"
-        receiver -> "Receiver connected, sender not connected"
-        sender -> "Sender connected, receiver not connected"
-        else -> "No boards connected"
+        receiver -> "Receiver connected \u00b7 sender not connected"
+        sender -> "Sender connected \u00b7 receiver not connected"
+        else -> "No boards connected \u2014 tap to set up"
     }
     val color = when {
         receiver && sender -> Ok
         receiver || sender -> Warn
         else -> Muted
     }
+    val allConnected = receiver && sender
+    val interactionSource = remember { MutableInteractionSource() }
     Row(
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                indication = null,
+                interactionSource = interactionSource,
+                enabled = !allConnected,
+                onClick = onTap,
+            )
+            .padding(horizontal = 16.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(10.dp).clip(CircleShape).background(color))
-        Text(text, style = MaterialTheme.typography.labelMedium)
+        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (allConnected) MaterialTheme.colorScheme.onSurface else color,
+        )
     }
 }

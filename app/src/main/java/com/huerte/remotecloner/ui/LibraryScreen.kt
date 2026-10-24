@@ -3,33 +3,41 @@ package com.huerte.remotecloner.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -40,13 +48,19 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.huerte.remotecloner.data.IrCode
 import com.huerte.remotecloner.data.keyName
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dialog state
+// ─────────────────────────────────────────────────────────────────────────────
 
 private sealed interface LibDialog {
     data object NewKey : LibDialog
@@ -58,47 +72,96 @@ private sealed interface LibDialog {
     data object DeleteRemote : LibDialog
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Screen
+// ─────────────────────────────────────────────────────────────────────────────
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun LibraryScreen(vm: RemoteViewModel, state: RemoteUiState) {
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var dialog by remember { mutableStateOf<LibDialog?>(null) }
+    var remoteMenu by remember { mutableStateOf(false) }
 
     val remote = state.remote
     val keys = remote?.keys.orEmpty()
     val sel = selected?.takeIf { it in keys }
     val q = query.trim().lowercase()
-    val shown = keys.entries.filter { (k, c) -> q.isEmpty() || q in k.lowercase() || q in c.note.lowercase() }
+    val shown = keys.entries.filter { (k, c) ->
+        q.isEmpty() || q in k.lowercase() || q in c.note.lowercase()
+    }
+
+    var notes by remember(state.current) { mutableStateOf(remote?.notes.orEmpty()) }
 
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(vm::importFrom)
     }
-    val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        uri?.let(vm::exportTo)
-    }
+    val exporter = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri -> uri?.let(vm::exportTo) }
 
-    val hScroll = rememberScrollState()           // shared, so the header and every row slide together
-    var notes by remember(state.current) { mutableStateOf(remote?.notes.orEmpty()) }
-
-    // One scrolling list holds the header controls and the table, so a short (landscape) screen still
-    // shows plenty of rows; only the key action buttons stay pinned at the bottom.
     Column(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(top = 16.dp)) {
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 8.dp),
+        ) {
+            // ── Page header ───────────────────────────────────────────────
             item {
-                Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Library", style = MaterialTheme.typography.headlineSmall)
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "My remotes",
+                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold),
+                    )
 
-                    RemoteSelector(state.names, state.current, vm::select, vm::newRemote)
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val has = state.current != null
-                        OutlinedButton(onClick = { dialog = LibDialog.RenameRemote }, enabled = has) { Text("Rename") }
-                        OutlinedButton(onClick = { dialog = LibDialog.DuplicateRemote }, enabled = has) { Text("Duplicate") }
-                        OutlinedButton(onClick = { importer.launch(arrayOf("*/*")) }) { Text("Import") }
-                        OutlinedButton(onClick = { exporter.launch("${state.current}.json") }, enabled = has) { Text("Export") }
-                        OutlinedButton(onClick = { dialog = LibDialog.DeleteRemote }, enabled = has, colors = dangerColors()) { Text("Delete") }
+                    // Remote selector + overflow menu
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Box(Modifier.weight(1f)) {
+                            RemoteSelector(state.names, state.current, vm::select, vm::newRemote)
+                        }
+                        // Overflow menu for remote-level actions
+                        Box {
+                            IconButton(
+                                onClick = { remoteMenu = true },
+                                enabled = state.current != null,
+                            ) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "Remote options")
+                            }
+                            DropdownMenu(expanded = remoteMenu, onDismissRequest = { remoteMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Rename") },
+                                    onClick = { dialog = LibDialog.RenameRemote; remoteMenu = false },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Duplicate") },
+                                    onClick = { dialog = LibDialog.DuplicateRemote; remoteMenu = false },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Import from file") },
+                                    onClick = { importer.launch(arrayOf("*/*")); remoteMenu = false },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Export to file") },
+                                    onClick = { exporter.launch("${state.current}.json"); remoteMenu = false },
+                                )
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            "Delete remote",
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                    },
+                                    onClick = { dialog = LibDialog.DeleteRemote; remoteMenu = false },
+                                )
+                            }
+                        }
                     }
 
+                    // Notes field
                     if (remote != null) {
                         OutlinedTextField(
                             value = notes,
@@ -106,58 +169,73 @@ fun LibraryScreen(vm: RemoteViewModel, state: RemoteUiState) {
                             label = { Text("Notes (brand, model, room)") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
                         )
+
+                        // Search
                         OutlinedTextField(
                             value = query,
                             onValueChange = { query = it },
-                            label = { Text("Search keys") },
+                            label = { Text("Search buttons") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
                         )
                     }
+
+                    Spacer(Modifier.height(4.dp))
                 }
             }
 
+            // ── Key list ──────────────────────────────────────────────────
             when {
-                remote == null -> item { EmptyHint("No remote selected. Create one with New remote.") }
+                remote == null -> item {
+                    EmptyHint("No remote selected. Create one with New remote above.")
+                }
                 shown.isEmpty() -> item {
                     EmptyHint(
-                        if (q.isNotEmpty()) "No keys match your search."
-                        else "This remote has no keys yet. Use Add key, or record them in Clone."
+                        if (q.isNotEmpty()) "No buttons match \"$q\"."
+                        else "No buttons yet. Tap Add button, or record them in the Clone tab."
                     )
                 }
-                else -> {
-                    // Same six columns as the Windows table; it scrolls sideways on a narrow screen.
-                    stickyHeader { TableHeader(hScroll) }
-                    itemsIndexed(shown, key = { _, e -> e.key }) { i, e ->
-                        TableRow(
-                            name = e.key,
-                            code = e.value,
-                            striped = i % 2 == 1,
-                            selected = e.key == sel,
-                            hScroll = hScroll,
-                            onClick = { selected = e.key },
-                            onDoubleClick = { selected = e.key; dialog = LibDialog.EditKey(e.key) },
-                        )
-                    }
+                else -> itemsIndexed(shown, key = { _, e -> e.key }) { _, e ->
+                    KeyCard(
+                        name = e.key,
+                        code = e.value,
+                        selected = e.key == sel,
+                        onClick = { selected = if (sel == e.key) null else e.key },
+                        onEdit = { selected = e.key; dialog = LibDialog.EditKey(e.key) },
+                        onRename = { dialog = LibDialog.RenameKey(e.key) },
+                        onRelearn = { vm.relearn(e.key) },
+                        onTest = { vm.testKey(e.key) },
+                        onDuplicate = { vm.duplicateKey(e.key) },
+                        onDelete = { dialog = LibDialog.DeleteKey(e.key) },
+                    )
                 }
             }
+
+            item { Spacer(Modifier.height(8.dp)) }
         }
 
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        // ── Add button pinned at bottom ────────────────────────────────────
+        Surface(
+            tonalElevation = 3.dp,
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            Button(onClick = { dialog = LibDialog.NewKey }, enabled = remote != null) { Text("Add key") }
-            OutlinedButton(onClick = { dialog = LibDialog.EditKey(sel!!) }, enabled = sel != null) { Text("Edit") }
-            OutlinedButton(onClick = { dialog = LibDialog.RenameKey(sel!!) }, enabled = sel != null) { Text("Rename") }
-            OutlinedButton(onClick = { vm.relearn(sel!!) }, enabled = sel != null) { Text("Re-learn") }
-            OutlinedButton(onClick = { vm.testKey(sel!!) }, enabled = sel != null) { Text("Test send") }
-            OutlinedButton(onClick = { vm.duplicateKey(sel!!) }, enabled = sel != null) { Text("Duplicate") }
-            OutlinedButton(onClick = { dialog = LibDialog.DeleteKey(sel!!) }, enabled = sel != null, colors = dangerColors()) { Text("Delete") }
+            Button(
+                onClick = { dialog = LibDialog.NewKey },
+                enabled = remote != null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                shape = RoundedCornerShape(10.dp),
+            ) {
+                Text("Add button")
+            }
         }
     }
 
+    // ── Dialogs ───────────────────────────────────────────────────────────
     when (val d = dialog) {
         null -> Unit
         LibDialog.NewKey -> EditKeyDialog(
@@ -173,7 +251,7 @@ fun LibraryScreen(vm: RemoteViewModel, state: RemoteUiState) {
             onDismiss = { dialog = null },
         )
         is LibDialog.RenameKey -> TextPromptDialog(
-            title = "Rename key",
+            title = "Rename button",
             label = "New name",
             initial = d.name,
             confirmText = "Rename",
@@ -181,8 +259,8 @@ fun LibraryScreen(vm: RemoteViewModel, state: RemoteUiState) {
             onDismiss = { dialog = null },
         )
         is LibDialog.DeleteKey -> ConfirmDialog(
-            title = "Delete key",
-            text = "Delete ${d.name}? This cannot be undone.",
+            title = "Delete button",
+            text = "Delete \"${d.name}\"? This cannot be undone.",
             confirmText = "Delete",
             onConfirm = { vm.deleteKey(d.name); dialog = null },
             onDismiss = { dialog = null },
@@ -197,15 +275,15 @@ fun LibraryScreen(vm: RemoteViewModel, state: RemoteUiState) {
         )
         LibDialog.DuplicateRemote -> TextPromptDialog(
             title = "Duplicate remote",
-            label = "Name of the copy",
-            initial = state.current.orEmpty() + "_copy",
+            label = "Name for the copy",
+            initial = "${state.current.orEmpty()}_copy",
             confirmText = "Duplicate",
             onConfirm = { vm.duplicateRemote(it); dialog = null },
             onDismiss = { dialog = null },
         )
         LibDialog.DeleteRemote -> ConfirmDialog(
             title = "Delete remote",
-            text = "Delete \u201c${state.current}\u201d and all its keys? This cannot be undone.",
+            text = "Delete \u201c${state.current}\u201d and all its buttons? This cannot be undone.",
             confirmText = "Delete",
             onConfirm = { vm.deleteRemote(); dialog = null },
             onDismiss = { dialog = null },
@@ -213,12 +291,124 @@ fun LibraryScreen(vm: RemoteViewModel, state: RemoteUiState) {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Key card (replaces horizontal-scroll table row)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun dangerColors() = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+private fun KeyCard(
+    name: String,
+    code: IrCode,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onEdit: () -> Unit,
+    onRename: () -> Unit,
+    onRelearn: () -> Unit,
+    onTest: () -> Unit,
+    onDuplicate: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var contextMenu by remember { mutableStateOf(false) }
+
+    val borderColor = if (selected) MaterialTheme.colorScheme.primary
+    else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0f)
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp)
+            .border(
+                width = if (selected) 1.5.dp else 0.dp,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                shape = RoundedCornerShape(12.dp),
+            )
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = { contextMenu = true },
+                onDoubleClick = onEdit,
+            ),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // Key name
+            Column(Modifier.weight(1f)) {
+                Text(
+                    name,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val meta = buildString {
+                    append(code.protocolLabel)
+                    if (code.note.isNotBlank()) append(" · ${code.note}")
+                }
+                Text(
+                    meta,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            // Signal info badge
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ) {
+                Text(
+                    "${code.raw.size}p",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
+
+            // More options
+            Box {
+                IconButton(onClick = { contextMenu = true }, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "Options for $name",
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                DropdownMenu(expanded = contextMenu, onDismissRequest = { contextMenu = false }) {
+                    DropdownMenuItem(text = { Text("Edit signal") }, onClick = { onEdit(); contextMenu = false })
+                    DropdownMenuItem(text = { Text("Rename") }, onClick = { onRename(); contextMenu = false })
+                    DropdownMenuItem(text = { Text("Re-learn") }, onClick = { onRelearn(); contextMenu = false })
+                    DropdownMenuItem(text = { Text("Test send") }, onClick = { onTest(); contextMenu = false })
+                    DropdownMenuItem(text = { Text("Duplicate") }, onClick = { onDuplicate(); contextMenu = false })
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                        onClick = { onDelete(); contextMenu = false },
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun EmptyHint(text: String) {
-    Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 32.dp),
+        contentAlignment = Alignment.Center,
+    ) {
         Text(
             text,
             style = MaterialTheme.typography.bodyMedium,
@@ -227,76 +417,9 @@ private fun EmptyHint(text: String) {
     }
 }
 
-private val COLUMN_WIDTHS = listOf(130.dp, 100.dp, 80.dp, 80.dp, 70.dp, 180.dp)
-@Composable
-private fun Cells(values: List<String>, style: TextStyle, color: Color) {
-    Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        values.forEachIndexed { i, v ->
-            Text(
-                v,
-                style = style,
-                color = color,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.width(COLUMN_WIDTHS[i]).padding(end = 8.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun TableHeader(hScroll: ScrollState) {
-    Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).heightIn(min = 36.dp), contentAlignment = Alignment.CenterStart) {
-        Box(Modifier.horizontalScroll(hScroll)) {
-            Cells(
-                listOf("Key", "Protocol", "Address", "Command", "Pulses", "Note"),
-                MaterialTheme.typography.labelMedium,
-                MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun TableRow(
-    name: String,
-    code: IrCode,
-    striped: Boolean,
-    selected: Boolean,
-    hScroll: ScrollState,
-    onClick: () -> Unit,
-    onDoubleClick: () -> Unit,
-) {
-    val bg = when {
-        selected -> MaterialTheme.colorScheme.primaryContainer
-        striped -> MaterialTheme.colorScheme.surfaceContainerLow
-        else -> MaterialTheme.colorScheme.surface
-    }
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .background(bg)
-            .combinedClickable(onClick = onClick, onDoubleClick = onDoubleClick)
-            .heightIn(min = 40.dp),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        Box(Modifier.horizontalScroll(hScroll)) {
-            Cells(
-                listOf(
-                    name,
-                    code.protocolLabel,
-                    code.addr?.toString().orEmpty(),
-                    code.cmd?.toString().orEmpty(),
-                    code.raw.size.toString(),
-                    code.note,
-                ),
-                MaterialTheme.typography.bodyMedium,
-                MaterialTheme.colorScheme.onSurface,
-            )
-        }
-    }
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Edit key dialog
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun EditKeyDialog(
@@ -317,16 +440,20 @@ private fun EditKeyDialog(
 
     fun save() {
         val key = keyName(name)
-        val timings = raw.replace(",", " ").split(Regex("\\s+")).filter { it.isNotEmpty() }.map { it.toIntOrNull() }
+        val timings = raw.replace(",", " ")
+            .split(Regex("\\s+"))
+            .filter { it.isNotEmpty() }
+            .map { it.toIntOrNull() }
         val p = proto.toIntOrNull()
         val a = addr.toIntOrNull()
         val c = cmd.toIntOrNull()
         val f = khz.toIntOrNull()
         when {
             key.isEmpty() || timings.size < 2 || timings.any { it == null || it < 0 } ->
-                error = "Enter a key name and at least two numeric raw timings."
-            p == null || p !in 0..99 || a == null || a !in 0..65535 || c == null || c !in 0..65535 || f == null || f !in 20..60 ->
-                error = "Protocol id is 0-99, address and command are 0-65535, frequency is 20-60 kHz."
+                error = "Enter a button name and at least two raw timing values."
+            p == null || p !in 0..99 || a == null || a !in 0..65535 ||
+                c == null || c !in 0..65535 || f == null || f !in 20..60 ->
+                error = "Protocol: 0–99 · Address/Command: 0–65535 · Frequency: 20–60 kHz"
             else -> onSave(
                 key,
                 IrCode(
@@ -339,18 +466,43 @@ private fun EditKeyDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (initialName.isEmpty()) "Add key" else "Edit key") },
+        title = { Text(if (initialName.isEmpty()) "Add button" else "Edit button") },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(name, { name = it }, label = { Text("Key name") }, singleLine = true)
-                OutlinedTextField(pname, { pname = it }, label = { Text("Protocol name") }, singleLine = true)
-                OutlinedTextField(proto, { proto = it }, label = { Text("Protocol id") }, singleLine = true, keyboardOptions = number)
-                OutlinedTextField(addr, { addr = it }, label = { Text("Address") }, singleLine = true, keyboardOptions = number)
-                OutlinedTextField(cmd, { cmd = it }, label = { Text("Command") }, singleLine = true, keyboardOptions = number)
-                OutlinedTextField(khz, { khz = it }, label = { Text("Carrier frequency (kHz)") }, singleLine = true, keyboardOptions = number)
-                OutlinedTextField(note, { note = it }, label = { Text("Note") }, singleLine = true)
-                OutlinedTextField(raw, { raw = it }, label = { Text("Raw timings (µs, comma separated)") }, minLines = 3, maxLines = 6)
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(name, { name = it }, label = { Text("Button name") }, singleLine = true, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(note, { note = it }, label = { Text("Note (optional)") }, singleLine = true, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth())
+
+                HorizontalDivider()
+                Text(
+                    "Signal details (filled automatically when recorded)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                OutlinedTextField(pname, { pname = it }, label = { Text("Protocol name") }, singleLine = true, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(proto, { proto = it }, label = { Text("Protocol id") }, singleLine = true, keyboardOptions = number, shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f))
+                    OutlinedTextField(khz, { khz = it }, label = { Text("kHz") }, singleLine = true, keyboardOptions = number, shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(addr, { addr = it }, label = { Text("Address") }, singleLine = true, keyboardOptions = number, shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f))
+                    OutlinedTextField(cmd, { cmd = it }, label = { Text("Command") }, singleLine = true, keyboardOptions = number, shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f))
+                }
+                OutlinedTextField(
+                    raw, { raw = it },
+                    label = { Text("Raw timings (µs, comma-separated)") },
+                    minLines = 3, maxLines = 5,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
             }
         },
         confirmButton = { TextButton(onClick = ::save) { Text("Save") } },
